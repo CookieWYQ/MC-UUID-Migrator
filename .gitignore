@@ -1,0 +1,27 @@
+# 构建产物与中间目录
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+*.spec.bak
+
+# 运行时生成的备份（含玩家数据，切勿提交）
+uuid_backup_*/
+xaero_backup_*/
+*.log
+
+# 第三方模组 / 二进制，不随仓库分发
+*.jar
+*.zip
+
+# 开发调试用脚本（含真实 UUID，不入库）
+nbt_inspect.py
+verify_mig.py
+_server_B.dat
+_server_B_old.dat
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
