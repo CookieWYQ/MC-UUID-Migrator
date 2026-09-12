@@ -49,7 +49,9 @@ Xaero 的路径点与已探索地图保存在**客户端**，按「世界 / 服�
 
 ## 下载
 
-前往 **[Releases](../../releases)** 下载 `UUID玩家数据迁移.exe`，双击运行即可（Windows 64 位）。
+前往 **[Releases](https://github.com/CookieWYQ/MC-UUID-Migrator/releases)** 下载最新的 `MC-UUID-Migrator-v1.0.0.exe`，双击运行即可（Windows 64 位）。
+
+> 说明：Release 附件使用英文名；程序窗口标题与构建产物名仍为中文 `UUID玩家数据迁移.exe`，二者是同一个程序。
 
 ---
 
