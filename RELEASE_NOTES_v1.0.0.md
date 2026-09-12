@@ -72,7 +72,7 @@
 
 ## 致谢与声明
 
-- 作者：**CallMeACookieWYQ**，许可：[MIT](../LICENSE)
+- 作者：**CallMeACookieWYQ**，许可：[MIT](https://github.com/CookieWYQ/MC-UUID-Migrator/blob/main/LICENSE)
 
 - 本 Release **不含任何第三方模组文件**；提到的 Xaero 等名称仅用于说明兼容性，版权归原作者所有
 
