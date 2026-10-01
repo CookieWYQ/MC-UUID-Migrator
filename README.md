@@ -41,7 +41,15 @@ Xaero 的路径点与已探索地图保存在**客户端**，按「世界 / 服�
 - **多世界 ID 对齐**：可读取服务器 `world/xaeromap.txt` 的 `id:<数字>`，自动用 `mw$<ID>_1.txt` 命名；服务器换 ID 时可一键把旧文件名改名对齐
 - 维度自动映射：`dim%0 ↔ null`、`dim%-1 ↔ DIM-1`、`dim%1 ↔ DIM1`
 
-### 4. 其他
+### 4. 自动更新
+
+- **启动静默检查**：只在新版本存在时提示，不打扰
+- **一键更新**：弹窗确认 → 自动下载 → 替换自身 → 重启（无需手动下载覆盖）
+- **双源检查**：Gitee 优先（国内直连更快）→ GitHub 兜底；下载同样先试 Gitee 直链再回退 GitHub
+- 下载支持断点续传、断线自动重试、重定向跟随，并校验文件大小与 PE 头（防止把错误页当成安装包）
+- 弹窗选「否」= 跳过该版本，下次启动不再重复提示（仍可手动点「检查更新」）
+
+### 5. 其他
 
 - **迁移前自动备份**（见下文「备份与还原」），可整体还原
 - **一键替换**：填用户名 + 方向（正版→离线 / 离线→正版），自动算出两个 UUID 并执行
@@ -52,7 +60,8 @@ Xaero 的路径点与已探索地图保存在**客户端**，按「世界 / 服�
 
 ## 下载
 
-前往 **[Releases](https://github.com/CookieWYQ/MC-UUID-Migrator/releases)** 下载最新的 `MC-UUID-Migrator-v1.1.0.exe`，双击运行即可（Windows 64 位）。
+前往 **[Releases](https://github.com/CookieWYQ/MC-UUID-Migrator/releases)** 下载最新的 `MC-UUID-Migrator-v1.2.0.exe`，双击运行即可（Windows 64 位）。
+Gitee 镜像：**[gitee.com/CookieWYQ/MC-UUID-Migrator/releases](https://gitee.com/CookieWYQ/MC-UUID-Migrator/releases)**（国内下载更快，程序内「检查更新」也会优先走 Gitee）。
 
 > 说明：Release 附件使用英文名；程序窗口标题与构建产物名仍为中文 `UUID玩家数据迁移.exe`，二者是同一个程序。
 
@@ -105,6 +114,9 @@ python uuid_transfer_tool.py --sftp-host <地址> --sftp-port <端口> --sftp-us
 # Xaero 地图转移
 python uuid_transfer_tool.py --xaero-root <客户端目录> --xaero-src <源容器> --xaero-dst <目标容器> [--xaero-scan]
 python uuid_transfer_tool.py --xaero-root <客户端目录> --xaero-dst <容器> --xaero-world <服务器world目录> --xaero-align
+
+# 检查更新（命令行）
+python uuid_transfer_tool.py --check-update
 ```
 
 ---

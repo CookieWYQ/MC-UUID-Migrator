@@ -31,13 +31,19 @@ import glob
 import json
 import gzip
 import zlib
+import time
 import struct
 import shutil
 import argparse
 import datetime
+import tempfile
+import subprocess
 import threading
 import queue
+import http.client
+import urllib.request
 import tkinter as tk
+from urllib.parse import urljoin, urlsplit
 from tkinter import ttk, filedialog, messagebox, font as tkfont
 
 
@@ -1246,6 +1252,253 @@ def sftp_transfer(ssh, remote_root, uuid_a, uuid_b, report=None, progress=None, 
     return saved_backup, mirror
 
 
+# ---- 自动更新 ----
+# 检查方式参考 MinecraftModsCloudSync：多源查询各自的 releases/latest（Gitee 优先，国内直连更快），
+# 取第一个带 .exe 附件的源；下载沿用「keep-alive + 断点续传 + 断线重试 + 重定向跟随 + 长度校验」。
+# 区别：本工具是单文件 exe（非安装包），所以下载完成后直接原地替换自身并重启。
+APP_VERSION = "1.2.0"
+GH_REPO = "CookieWYQ/MC-UUID-Migrator"
+GITEE_REPO = "CookieWYQ/MC-UUID-Migrator"
+GH_LATEST_API = "https://api.github.com/repos/%s/releases/latest" % GH_REPO
+GITEE_LATEST_API = "https://gitee.com/api/v5/repos/%s/releases/latest" % GITEE_REPO
+UPDATE_SOURCES = ("gitee", "github")      # 更新源顺序：Gitee 优先（国内快），GitHub 兜底
+ASSET_PREFIX = "mc-uuid-migrator"         # 更新附件名前缀（不区分大小写）
+DOWNLOAD_RETRIES = 3                      # 断线自动重试次数（配合断点续传）
+MAX_REDIRECTS = 5                         # 下载最多跟随的重定向次数（Gitee 会 302 到对象存储）
+_DL_CHUNK = 64 * 1024
+
+
+def release_page():
+    """最新版本发布页（给手动下载兜底用）"""
+    return "https://github.com/%s/releases/latest" % GH_REPO
+
+
+def parse_version(text):
+    """'v1.2.0' → (1, 2, 0)；解析不出数字返回 None"""
+    m = re.search(r"v?(\d+(?:\.\d+)*)", text or "")
+    return tuple(int(x) for x in m.group(1).split(".")) if m else None
+
+
+def is_newer(tag):
+    """tag 是否比当前版本新"""
+    a, b = parse_version(tag), parse_version(APP_VERSION)
+    return bool(a and b and a > b)
+
+
+def _pick_asset(assets):
+    """从附件列表里挑出更新包（前缀 + .exe）"""
+    for a in assets or []:
+        name = (a.get("name") or "").lower()
+        if name.startswith(ASSET_PREFIX) and name.endswith(".exe"):
+            return a
+    return None
+
+
+def _fetch_github(timeout=15):
+    req = urllib.request.Request(
+        GH_LATEST_API,
+        headers={"User-Agent": "MC-UUID-Migrator/%s" % APP_VERSION,
+                 "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.loads(r.read().decode("utf-8", "replace"))
+    a = _pick_asset(d.get("assets"))
+    if not a:
+        return None
+    return {
+        "tag": d.get("tag_name", ""),
+        "published_at": str(d.get("published_at", "")).replace("T", " ")[:16],
+        "body": d.get("body") or "",
+        "asset_name": a.get("name", ""),
+        "asset_url": a.get("browser_download_url", ""),
+        "asset_size": int(a.get("size") or 0),
+        "source": "GitHub",
+    }
+
+
+def _fetch_gitee(timeout=15):
+    req = urllib.request.Request(
+        GITEE_LATEST_API,
+        headers={"User-Agent": "MC-UUID-Migrator/%s" % APP_VERSION,
+                 "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.loads(r.read().decode("utf-8", "replace"))
+    # Gitee 附件字段有 assets / attach_files 两种命名
+    a = _pick_asset(d.get("assets") or d.get("attach_files"))
+    if not a:
+        return None
+    return {
+        "tag": d.get("tag_name", ""),
+        "published_at": str(d.get("created_at", "")).replace("T", " ")[:16],
+        "body": d.get("body") or "",
+        "asset_name": a.get("name", ""),
+        "asset_url": a.get("browser_download_url") or a.get("url") or "",
+        "asset_size": int(a.get("size") or 0),
+        "source": "Gitee",
+    }
+
+
+def fetch_latest(timeout=15):
+    """依次尝试各更新源，返回第一个带更新包的版本信息；全部不可用则抛异常"""
+    last_err = None
+    for src in UPDATE_SOURCES:
+        try:
+            info = _fetch_github(timeout) if src == "github" else _fetch_gitee(timeout)
+            if info and info["asset_url"]:
+                return info
+            last_err = last_err or RuntimeError("更新源 %s 未发布更新包" % src)
+        except Exception as e:
+            last_err = e
+    raise last_err or RuntimeError("无法获取最新版本信息")
+
+
+def _download_candidates(url):
+    """下载通道：GitHub 直链优先换同 tag/文件名的 Gitee 直链（国内快），失败回退原链"""
+    m = re.match(r"https://github\.com/[^/]+/[^/]+/releases/download/([^/]+)/(.+)", url or "")
+    if m:
+        return ["https://gitee.com/%s/releases/download/%s/%s"
+                % (GITEE_REPO, m.group(1), m.group(2)), url]
+    return [url]
+
+
+def download_file(url, dest, progress=None, cancel=None, timeout=30, expected_size=0):
+    """下载更新包到 dest。progress(已下载, 总字节, 消息)；cancel() 返回 True 表示取消。
+    支持断点续传、断线重试、重定向跟随，并按 Content-Length 与期望大小校验完整性。"""
+    last_err = None
+    candidates = _download_candidates(url)
+    for i, target in enumerate(candidates):
+        if cancel and cancel():
+            raise RuntimeError("已取消下载")
+        try:
+            _download_one(target, dest, progress, cancel, timeout)
+            _verify_download(dest, expected_size)
+            return dest
+        except Exception as e:
+            last_err = e
+            if progress:
+                progress(0, 0, "通道 %d/%d 不可用，切换下一通道…" % (i + 1, len(candidates)))
+    raise last_err or RuntimeError("下载失败")
+
+
+def _verify_download(path, expected_size=0):
+    """校验下载结果：大小与发布页声明一致，且确实是 Windows 可执行文件。
+    （更新源不存在时可能返回 200 的 HTML 错误页，只靠 HTTP 状态码会被误判为成功）"""
+    size = os.path.getsize(path)
+    if expected_size and size != expected_size:
+        raise RuntimeError("文件大小不符（%d/%d 字节）" % (size, expected_size))
+    with open(path, "rb") as fh:
+        if fh.read(2) != b"MZ":
+            raise RuntimeError("下载内容不是可执行文件（可能被更新源拦截或该源尚未发布）")
+
+
+def _download_one(url, dest, progress, cancel, timeout):
+    if os.path.exists(dest):                 # 清残留：避免与别的版本拼接
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+    total = done = 0
+    redirects = 0
+    for attempt in range(DOWNLOAD_RETRIES):
+        have = os.path.getsize(dest) if os.path.exists(dest) else 0
+        parts = urlsplit(url)
+        path = parts.path + (("?" + parts.query) if parts.query else "")
+        conn = None
+        try:
+            conn = (http.client.HTTPSConnection(parts.netloc, timeout=timeout)
+                    if parts.scheme == "https" else
+                    http.client.HTTPConnection(parts.netloc, timeout=timeout))
+            headers = {"User-Agent": "MC-UUID-Migrator/%s" % APP_VERSION,
+                       "Connection": "keep-alive"}
+            if have:
+                headers["Range"] = "bytes=%d-" % have
+            conn.request("GET", path, headers=headers)
+            resp = conn.getresponse()
+            if resp.status in (301, 302, 303, 307, 308):
+                loc = resp.getheader("Location")
+                conn.close()
+                conn = None
+                if not loc:
+                    raise RuntimeError("HTTP %d 缺少跳转地址" % resp.status)
+                if redirects >= MAX_REDIRECTS:
+                    raise RuntimeError("重定向次数过多")
+                url = urljoin(url, loc)
+                redirects += 1
+                continue
+            if resp.status == 416:           # 本地残留与服务器不一致 → 清空重下
+                conn.close()
+                try:
+                    os.remove(dest)
+                except OSError:
+                    pass
+                continue
+            if resp.status not in (200, 206):
+                raise RuntimeError("HTTP %d" % resp.status)
+            if resp.status == 206:
+                total = have + int(resp.headers.get("Content-Length") or 0)
+                mode = "ab"
+            else:
+                have = 0
+                total = int(resp.headers.get("Content-Length") or 0)
+                mode = "wb"
+            if progress:
+                progress(have, total, "开始下载…")
+            with open(dest, mode) as fh:
+                while True:
+                    if cancel and cancel():
+                        raise RuntimeError("已取消下载")
+                    chunk = resp.read(_DL_CHUNK)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    done = have + len(chunk)
+                    have = done
+                    if progress:
+                        progress(done, total, "已下载 %.1f MB" % (done / 1048576.0))
+            conn.close()
+            conn = None
+            if total and have != total:      # 服务器声明了总长就必须下齐
+                raise RuntimeError("下载不完整（%d/%d 字节）" % (have, total))
+            if progress:
+                progress(have, total, "下载完成")
+            return dest
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            if (cancel and cancel()) or attempt >= DOWNLOAD_RETRIES - 1:
+                raise
+            if progress:
+                progress(done, total, "连接中断，自动重试（%d/%d）…" % (attempt + 1, DOWNLOAD_RETRIES))
+            time.sleep(1)
+    raise RuntimeError("下载失败")
+
+
+def apply_update(new_exe):
+    """单文件 exe 的原地更新：用临时 cmd 等本进程退出 → 覆盖自身 → 重启"""
+    if not getattr(sys, "frozen", False):
+        raise RuntimeError("当前以源码方式运行，请手动替换")
+    target = os.path.abspath(sys.executable)
+    cmd = os.path.join(tempfile.gettempdir(), "mc_uuid_upd_%d.cmd" % os.getpid())
+    with open(cmd, "w", encoding="mbcs", errors="replace") as fh:
+        fh.write("@echo off\r\n")
+        fh.write(":wait\r\n")
+        fh.write('tasklist /fi "PID eq %d" | find "%d" >nul\r\n' % (os.getpid(), os.getpid()))
+        fh.write("if not errorlevel 1 (\r\n")
+        fh.write("  ping -n 2 127.0.0.1 >nul\r\n")
+        fh.write("  goto wait\r\n")
+        fh.write(")\r\n")
+        fh.write('move /y "%s" "%s" >nul 2>nul\r\n' % (new_exe, target))
+        fh.write("if errorlevel 1 (\r\n")          # 覆盖失败（如放在受保护目录）→ 直接运行新版
+        fh.write('  start "" "%s"\r\n' % new_exe)
+        fh.write(") else (\r\n")
+        fh.write('  start "" "%s"\r\n' % target)
+        fh.write(")\r\n")
+        fh.write('del "%~f0"\r\n')
+    subprocess.Popen(["cmd", "/c", cmd], creationflags=0x00000008)   # DETACHED_PROCESS
+
+
 class App:
     def __init__(self, master):
         self.master = master
@@ -1253,6 +1506,7 @@ class App:
         master.geometry("720x560")
         self.q = queue.Queue()
         self.cancel = threading.Event()
+        self._upd_running = False
 
         frm = ttk.Frame(master, padding=8)
         frm.pack(fill="both", expand=True)
@@ -1271,6 +1525,9 @@ class App:
         self.auto_btn.pack(side="left", padx=4)
         ttk.Label(top, text="（自动算正版/离线 UUID 填入当前页并执行替换）").pack(side="left")
         ttk.Button(top, text="使用教程", command=self.show_tutorial).pack(side="right", padx=4)
+        self.update_btn = ttk.Button(top, text="检查更新", command=lambda: self.check_update(manual=True))
+        self.update_btn.pack(side="right", padx=4)
+        ttk.Label(top, text="v" + APP_VERSION).pack(side="right")
 
         nb = ttk.Notebook(frm)
         nb.grid(row=1, column=0, columnspan=3, sticky="nsew")
@@ -1394,6 +1651,7 @@ class App:
         self._load_server_config()
         master.protocol("WM_DELETE_WINDOW", self._on_close)
         master.after(100, self.poll)
+        master.after(2000, lambda: self.check_update(manual=False))   # 启动后静默检查更新
 
     def _load_server_config(self):
         cfg = load_config()
@@ -1429,6 +1687,87 @@ class App:
     def _on_close(self):
         self._save_server_config()
         self.master.destroy()
+
+    # ---- 自动更新 ----
+
+    def check_update(self, manual=False):
+        """检查更新（Gitee 优先、GitHub 兜底）。manual=False 为启动时的静默检查：仅在有新版时提示"""
+        if self._upd_running:
+            return
+        self._upd_running = True
+        self.update_btn.configure(state="disabled")
+        if manual:
+            self.status.set("正在检查更新…")
+        threading.Thread(target=self._worker_update, args=(manual,), daemon=True).start()
+
+    def _worker_update(self, manual):
+        try:
+            info = fetch_latest()
+        except Exception as e:
+            self.q.put(("upd_err", str(e), manual))
+            return
+        self.q.put(("upd_info", info, manual))
+
+    def _on_update_info(self, info, manual):
+        self._upd_running = False
+        self.update_btn.configure(state="normal")
+        if not (info and is_newer(info.get("tag", ""))):
+            if manual:
+                messagebox.showinfo("检查更新", "当前已是最新版本 v%s" % APP_VERSION)
+            return
+        if not manual and load_config().get("skip_version") == info["tag"]:
+            return                                   # 该版本用户已选过「稍后」，启动时不再打扰
+        size = ("%.1f MB" % (info["asset_size"] / 1048576.0)) if info["asset_size"] else "未知大小"
+        body = (info.get("body") or "").strip()
+        if len(body) > 800:
+            body = body[:800] + "\n…（完整说明见发布页）"
+        msg = ("发现新版本 %s（当前 v%s）\n来源：%s ｜ 大小：%s ｜ 发布：%s\n\n%s\n\n"
+               "是否立即下载并自动更新？"
+               % (info["tag"], APP_VERSION, info["source"], size,
+                  info.get("published_at", ""), body or "（无更新说明）"))
+        self.listbox.insert("end", "[更新] 发现新版本 %s（%s）" % (info["tag"], info["source"]))
+        self.listbox.see("end")
+        if messagebox.askyesno("发现新版本", msg):
+            self._download_update(info)
+        else:
+            cfg = load_config()
+            cfg["skip_version"] = info["tag"]
+            save_config(cfg)
+            self.status.set("已跳过 %s；可随时点「检查更新」重新查看" % info["tag"])
+
+    def _download_update(self, info):
+        self.cancel.clear()
+        self.prog.configure(value=0)
+        self.update_btn.configure(state="disabled")
+        self.status.set("下载更新包…")
+        threading.Thread(target=self._worker_download, args=(info,), daemon=True).start()
+
+    def _worker_download(self, info):
+        dest = os.path.join(tempfile.gettempdir(),
+                            info.get("asset_name") or "MC-UUID-Migrator-update.exe")
+        try:
+            download_file(info["asset_url"], dest,
+                          progress=lambda d, t, m: self.q.put(("upd_prog", d, t, m)),
+                          cancel=self.cancel.is_set,
+                          expected_size=info.get("asset_size") or 0)
+        except Exception as e:
+            self.q.put(("upd_dl_err", str(e)))
+            return
+        self.q.put(("upd_ready", dest))
+
+    def _apply_update(self, path):
+        if not messagebox.askyesno("更新就绪",
+                                   "新版本已下载完成。\n\n点击「是」将关闭本程序、"
+                                   "替换为新版本并自动重启。"):
+            self.update_btn.configure(state="normal")
+            return
+        try:
+            apply_update(path)
+        except Exception as e:
+            self.update_btn.configure(state="normal")
+            messagebox.showerror("更新失败", "%s\n\n可手动下载：%s" % (e, release_page()))
+            return
+        self._on_close()
 
     def auto_replace(self):
         """按用户名一键替换：根据方向把 正版/离线 UUID 填为 A/B 并执行迁移"""
@@ -1825,6 +2164,28 @@ class App:
                     self.status.set("完成")
                     self._busy(False)
                     messagebox.showinfo("完成", "操作完成")
+                elif kind == "upd_info":
+                    self._on_update_info(item[1], item[2])
+                elif kind == "upd_err":
+                    self._upd_running = False
+                    self.update_btn.configure(state="normal")
+                    if item[2]:
+                        messagebox.showwarning("检查更新失败",
+                                               "%s\n\n可稍后重试，或手动打开：%s"
+                                               % (item[1], release_page()))
+                    else:
+                        self.status.set("更新检查失败，可点「检查更新」重试")
+                elif kind == "upd_prog":
+                    _, done, total, m = item
+                    if total:
+                        self.prog.configure(value=done * 100 // total)
+                    self.status.set(m)
+                elif kind == "upd_ready":
+                    self._apply_update(item[1])
+                elif kind == "upd_dl_err":
+                    self.update_btn.configure(state="normal")
+                    messagebox.showerror("下载更新失败",
+                                         "%s\n\n可手动下载：%s" % (item[1], release_page()))
         except queue.Empty:
             pass
         self.master.after(100, self.poll)
@@ -1851,7 +2212,19 @@ def main_cli():
     ap.add_argument("--xaero-world", help="服务器世界目录（本地或配合 --sftp-* 的远端路径），用于读取多世界ID")
     ap.add_argument("--xaero-id", help="Xaero 多世界ID（直接用该ID命名目标文件）")
     ap.add_argument("--xaero-align", action="store_true", help="只把目标容器文件名对齐到多世界ID")
+    ap.add_argument("--check-update", action="store_true", help="检查是否有新版本（命令行）")
     args = ap.parse_args()
+
+    if args.check_update:
+        print("当前版本: v%s" % APP_VERSION)
+        info = fetch_latest()
+        if info and is_newer(info.get("tag", "")):
+            print("发现新版本: %s（来源 %s，%.1f MB）"
+                  % (info["tag"], info["source"], info["asset_size"] / 1048576.0))
+            print("下载地址:", info["asset_url"])
+        else:
+            print("已是最新版本")
+        return
 
     if args.offline_uuid:
         print(offline_uuid(args.offline_uuid))
