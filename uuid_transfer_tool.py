@@ -1257,7 +1257,7 @@ def sftp_transfer(ssh, remote_root, uuid_a, uuid_b, report=None, progress=None, 
 # 检查方式参考 MinecraftModsCloudSync：多源查询各自的 releases/latest（Gitee 优先，国内直连更快），
 # 取第一个带 .exe 附件的源；下载沿用「keep-alive + 断点续传 + 断线重试 + 重定向跟随 + 长度校验」。
 # 区别：本工具是单文件 exe（非安装包），所以下载完成后直接原地替换自身并重启。
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 GH_REPO = "CookieWYQ/MC-UUID-Migrator"
 GITEE_REPO = "CookieWYQ/MC-UUID-Migrator"
 GH_LATEST_API = "https://api.github.com/repos/%s/releases/latest" % GH_REPO
@@ -1504,13 +1504,15 @@ class App:
     def __init__(self, master):
         self.master = master
         master.title("UUID 玩家数据迁移")
-        master.geometry("760x600")
+        master.geometry("860x740")
         self.q = queue.Queue()
         self.cancel = threading.Event()
         self._upd_running = False
+        self.log_visible = True
 
         frm = ttk.Frame(master, padding=8)
         frm.pack(fill="both", expand=True)
+        self.frm = frm
 
         # ---- 用户名一键替换（正版↔离线）----
         top = ttk.Frame(frm)
@@ -1625,7 +1627,7 @@ class App:
         head = ttk.Frame(t4)
         head.grid(row=0, column=0, sticky="we")
         try:                                      # 渲染软件图标（打包后从解包目录读取）
-            self._icon_img = tk.PhotoImage(file=resource_path("uuid_transfer_icon.png")).subsample(3)
+            self._icon_img = tk.PhotoImage(file=resource_path("uuid_transfer_icon.png")).subsample(4)
             tk.Label(head, image=self._icon_img).pack(side="left", padx=(0, 14))
         except Exception:
             self._icon_img = None
@@ -1658,7 +1660,7 @@ class App:
         ttk.Button(upd_btns, text="使用教程",
                    command=self.show_tutorial).pack(side="left", padx=6)
 
-        self.about_text = tk.Text(t4, height=9, wrap="word", relief="solid", borderwidth=1,
+        self.about_text = tk.Text(t4, height=6, wrap="word", relief="solid", borderwidth=1,
                                   state="disabled", background="#fbfbfb")
         self.about_text.grid(row=5, column=0, sticky="nsew", pady=(8, 0))
         t4.rowconfigure(5, weight=1)
@@ -1682,10 +1684,13 @@ class App:
         self.go_btn.pack(side="left", padx=4)
         self.cancel_btn = ttk.Button(btns, text="取消", command=lambda: self.cancel.set(), state="disabled")
         self.cancel_btn.pack(side="left", padx=4)
+        self.log_btn = ttk.Button(btns, text="隐藏日志", command=self.toggle_log)
+        self.log_btn.pack(side="left", padx=4)
 
         lb_frame = ttk.Frame(frm)
         lb_frame.grid(row=3, column=0, columnspan=3, sticky="nsew")
-        self.listbox = tk.Listbox(lb_frame, height=13)
+        self.lb_frame = lb_frame
+        self.listbox = tk.Listbox(lb_frame, height=8)
         self.listbox.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(lb_frame, orient="vertical", command=self.listbox.yview)
         sb.pack(side="right", fill="y")
@@ -1698,6 +1703,7 @@ class App:
         ttk.Label(frm, textvariable=self.status).grid(row=5, column=0, columnspan=3, sticky="w")
 
         frm.columnconfigure(0, weight=1)
+        frm.rowconfigure(1, weight=1)     # 分页区与日志区按权重共享空间，避免日志被压没
         frm.rowconfigure(3, weight=1)
 
         # 加载已保存的服务器配置
@@ -2150,6 +2156,18 @@ class App:
         self.xa_scan_btn.configure(state=st)
         self.xa_go_btn.configure(state=st)
         self.cancel_btn.configure(state="normal" if flag else "disabled")
+
+    def toggle_log(self):
+        """显示/隐藏日志区（进度条与状态栏始终保留）；隐藏时腾出的空间全给分页区"""
+        if self.log_visible:
+            self.lb_frame.grid_remove()
+            self.frm.rowconfigure(3, weight=0)
+            self.log_btn.configure(text="显示日志")
+        else:
+            self.lb_frame.grid()
+            self.frm.rowconfigure(3, weight=1)
+            self.log_btn.configure(text="隐藏日志")
+        self.log_visible = not self.log_visible
 
     def _prog(self, i, total):
         self.q.put(("prog", i * 100 // max(total, 1)))
