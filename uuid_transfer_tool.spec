@@ -9,7 +9,8 @@ a = Analysis(
     ['uuid_transfer_tool.py'],
     pathex=[],
     binaries=[],
-    datas=[('使用教程/*.md', '使用教程')],   # 教程 md 一并打进 exe（界面“使用教程”按钮查看）
+    datas=[('使用教程/*.md', '使用教程'),
+           ('uuid_transfer_icon.png', '.')],   # 教程 md + 图标（关于页要渲染图标）
     hiddenimports=['paramiko'],
     hookspath=[],
     hooksconfig={},

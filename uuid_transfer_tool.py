@@ -42,6 +42,7 @@ import threading
 import queue
 import http.client
 import urllib.request
+import webbrowser
 import tkinter as tk
 from urllib.parse import urljoin, urlsplit
 from tkinter import ttk, filedialog, messagebox, font as tkfont
@@ -1256,7 +1257,7 @@ def sftp_transfer(ssh, remote_root, uuid_a, uuid_b, report=None, progress=None, 
 # 检查方式参考 MinecraftModsCloudSync：多源查询各自的 releases/latest（Gitee 优先，国内直连更快），
 # 取第一个带 .exe 附件的源；下载沿用「keep-alive + 断点续传 + 断线重试 + 重定向跟随 + 长度校验」。
 # 区别：本工具是单文件 exe（非安装包），所以下载完成后直接原地替换自身并重启。
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 GH_REPO = "CookieWYQ/MC-UUID-Migrator"
 GITEE_REPO = "CookieWYQ/MC-UUID-Migrator"
 GH_LATEST_API = "https://api.github.com/repos/%s/releases/latest" % GH_REPO
@@ -1503,7 +1504,7 @@ class App:
     def __init__(self, master):
         self.master = master
         master.title("UUID 玩家数据迁移")
-        master.geometry("720x560")
+        master.geometry("760x600")
         self.q = queue.Queue()
         self.cancel = threading.Event()
         self._upd_running = False
@@ -1525,9 +1526,6 @@ class App:
         self.auto_btn.pack(side="left", padx=4)
         ttk.Label(top, text="（自动算正版/离线 UUID 填入当前页并执行替换）").pack(side="left")
         ttk.Button(top, text="使用教程", command=self.show_tutorial).pack(side="right", padx=4)
-        self.update_btn = ttk.Button(top, text="检查更新", command=lambda: self.check_update(manual=True))
-        self.update_btn.pack(side="right", padx=4)
-        ttk.Label(top, text="v" + APP_VERSION).pack(side="right")
 
         nb = ttk.Notebook(frm)
         nb.grid(row=1, column=0, columnspan=3, sticky="nsew")
@@ -1620,6 +1618,61 @@ class App:
             row=9, column=0, columnspan=3, sticky="w")
         t3.columnconfigure(1, weight=1)
 
+        # ---- 关于页（软件信息 + 自动更新）----
+        t4 = ttk.Frame(nb, padding=10)
+        nb.add(t4, text="关于")
+
+        head = ttk.Frame(t4)
+        head.grid(row=0, column=0, sticky="we")
+        try:                                      # 渲染软件图标（打包后从解包目录读取）
+            self._icon_img = tk.PhotoImage(file=resource_path("uuid_transfer_icon.png")).subsample(3)
+            tk.Label(head, image=self._icon_img).pack(side="left", padx=(0, 14))
+        except Exception:
+            self._icon_img = None
+        info = ttk.Frame(head)
+        info.pack(side="left", anchor="n", fill="both", expand=True)
+        tk.Label(info, text="MC UUID 玩家数据迁移工具",
+                 font=("Microsoft YaHei UI", 13, "bold")).pack(anchor="w")
+        tk.Label(info, text="版本：v%s" % APP_VERSION).pack(anchor="w", pady=(6, 0))
+        tk.Label(info, text="作者：CallMeACookieWYQ").pack(anchor="w")
+        tk.Label(info, text="许可：MIT").pack(anchor="w")
+        links = ttk.Frame(info)
+        links.pack(anchor="w", pady=(8, 0))
+        self._link(links, "GitHub 仓库", "https://github.com/%s" % GH_REPO).pack(side="left")
+        self._link(links, "Gitee 发行版", "https://gitee.com/%s/releases" % GITEE_REPO).pack(
+            side="left", padx=(14, 0))
+
+        ttk.Separator(t4, orient="horizontal").grid(row=1, column=0, sticky="we", pady=10)
+        tk.Label(t4, text="自动更新", font=("Microsoft YaHei UI", 10, "bold")).grid(row=2, column=0, sticky="w")
+        self.about_state = tk.StringVar(value="当前版本 v%s ｜ 更新源：Gitee（优先）→ GitHub ｜ 上次检查：—"
+                                             % APP_VERSION)
+        ttk.Label(t4, textvariable=self.about_state).grid(row=3, column=0, sticky="w", pady=(4, 6))
+
+        upd_btns = ttk.Frame(t4)
+        upd_btns.grid(row=4, column=0, sticky="w")
+        self.update_btn = ttk.Button(upd_btns, text="检查更新",
+                                     command=lambda: self.check_update(manual=True))
+        self.update_btn.pack(side="left")
+        ttk.Button(upd_btns, text="打开发布页",
+                   command=lambda: webbrowser.open(release_page())).pack(side="left", padx=6)
+        ttk.Button(upd_btns, text="使用教程",
+                   command=self.show_tutorial).pack(side="left", padx=6)
+
+        self.about_text = tk.Text(t4, height=9, wrap="word", relief="solid", borderwidth=1,
+                                  state="disabled", background="#fbfbfb")
+        self.about_text.grid(row=5, column=0, sticky="nsew", pady=(8, 0))
+        t4.rowconfigure(5, weight=1)
+        t4.columnconfigure(0, weight=1)
+
+        cfg = load_config()
+        self._about_log("检查顺序：Gitee 优先（国内直连更快）→ GitHub 兜底。")
+        self._about_log("发现新版本会弹窗询问，确认后自动下载、替换本程序并重启。")
+        if cfg.get("last_check"):
+            self.about_state.set("当前版本 v%s ｜ 更新源：Gitee（优先）→ GitHub ｜ 上次检查：%s"
+                                 % (APP_VERSION, cfg["last_check"]))
+        if cfg.get("skip_version"):
+            self._about_log("已跳过版本：%s（启动时不再提示，可点「检查更新」重新查看）。" % cfg["skip_version"])
+
         # ---- 共用按钮 / 日志 / 进度 ----
         btns = ttk.Frame(frm)
         btns.grid(row=2, column=0, columnspan=3, pady=4)
@@ -1690,6 +1743,30 @@ class App:
 
     # ---- 自动更新 ----
 
+    def _link(self, parent, text, url):
+        """可点击的链接标签"""
+        f = tkfont.nametofont("TkDefaultFont").copy()
+        f.configure(underline=True)
+        lb = tk.Label(parent, text=text, fg="#0a66c2", cursor="hand2", font=f)
+        lb.bind("<Button-1>", lambda e: webbrowser.open(url))
+        return lb
+
+    def _about_log(self, msg):
+        """把一行信息追加到「关于」页的更新日志区"""
+        self.about_text.configure(state="normal")
+        self.about_text.insert("end", msg + "\n")
+        self.about_text.see("end")
+        self.about_text.configure(state="disabled")
+
+    def _mark_checked(self):
+        """记录本次检查时间，并刷新关于页的状态行"""
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cfg = load_config()
+        cfg["last_check"] = now
+        save_config(cfg)
+        self.about_state.set("当前版本 v%s ｜ 更新源：Gitee（优先）→ GitHub ｜ 上次检查：%s"
+                             % (APP_VERSION, now))
+
     def check_update(self, manual=False):
         """检查更新（Gitee 优先、GitHub 兜底）。manual=False 为启动时的静默检查：仅在有新版时提示"""
         if self._upd_running:
@@ -1711,13 +1788,20 @@ class App:
     def _on_update_info(self, info, manual):
         self._upd_running = False
         self.update_btn.configure(state="normal")
+        self._mark_checked()
         if not (info and is_newer(info.get("tag", ""))):
+            self._about_log("检查完成：当前已是最新版本（v%s）。" % APP_VERSION)
             if manual:
                 messagebox.showinfo("检查更新", "当前已是最新版本 v%s" % APP_VERSION)
             return
         if not manual and load_config().get("skip_version") == info["tag"]:
             return                                   # 该版本用户已选过「稍后」，启动时不再打扰
         size = ("%.1f MB" % (info["asset_size"] / 1048576.0)) if info["asset_size"] else "未知大小"
+        self._about_log("发现新版本 %s（来源 %s ｜ %s ｜ 发布 %s）"
+                        % (info["tag"], info["source"], size, info.get("published_at", "")))
+        for line in (info.get("body") or "").strip().splitlines():
+            if line.strip():
+                self._about_log("    " + line.strip())
         body = (info.get("body") or "").strip()
         if len(body) > 800:
             body = body[:800] + "\n…（完整说明见发布页）"
@@ -1734,12 +1818,14 @@ class App:
             cfg["skip_version"] = info["tag"]
             save_config(cfg)
             self.status.set("已跳过 %s；可随时点「检查更新」重新查看" % info["tag"])
+            self._about_log("已跳过版本 %s，之后启动不再提示（可在「关于」页手动检查）。" % info["tag"])
 
     def _download_update(self, info):
         self.cancel.clear()
         self.prog.configure(value=0)
         self.update_btn.configure(state="disabled")
         self.status.set("下载更新包…")
+        self._about_log("开始下载 %s（%s）…" % (info.get("asset_name", ""), info["source"]))
         threading.Thread(target=self._worker_download, args=(info,), daemon=True).start()
 
     def _worker_download(self, info):
@@ -1760,11 +1846,14 @@ class App:
                                    "新版本已下载完成。\n\n点击「是」将关闭本程序、"
                                    "替换为新版本并自动重启。"):
             self.update_btn.configure(state="normal")
+            self._about_log("已取消替换，更新包保留在：%s" % path)
             return
+        self._about_log("正在替换并重启…")
         try:
             apply_update(path)
         except Exception as e:
             self.update_btn.configure(state="normal")
+            self._about_log("替换失败：%s" % e)
             messagebox.showerror("更新失败", "%s\n\n可手动下载：%s" % (e, release_page()))
             return
         self._on_close()
@@ -2169,6 +2258,7 @@ class App:
                 elif kind == "upd_err":
                     self._upd_running = False
                     self.update_btn.configure(state="normal")
+                    self._about_log("检查失败：%s" % item[1])
                     if item[2]:
                         messagebox.showwarning("检查更新失败",
                                                "%s\n\n可稍后重试，或手动打开：%s"
@@ -2181,9 +2271,11 @@ class App:
                         self.prog.configure(value=done * 100 // total)
                     self.status.set(m)
                 elif kind == "upd_ready":
+                    self._about_log("下载完成：%s" % item[1])
                     self._apply_update(item[1])
                 elif kind == "upd_dl_err":
                     self.update_btn.configure(state="normal")
+                    self._about_log("下载失败：%s" % item[1])
                     messagebox.showerror("下载更新失败",
                                          "%s\n\n可手动下载：%s" % (item[1], release_page()))
         except queue.Empty:
