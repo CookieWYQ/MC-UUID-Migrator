@@ -1257,13 +1257,14 @@ def sftp_transfer(ssh, remote_root, uuid_a, uuid_b, report=None, progress=None, 
 # 检查方式参考 MinecraftModsCloudSync：多源查询各自的 releases/latest（Gitee 优先，国内直连更快），
 # 取第一个带 .exe 附件的源；下载沿用「keep-alive + 断点续传 + 断线重试 + 重定向跟随 + 长度校验」。
 # 区别：本工具是单文件 exe（非安装包），所以下载完成后直接原地替换自身并重启。
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 GH_REPO = "CookieWYQ/MC-UUID-Migrator"
 GITEE_REPO = "CookieWYQ/MC-UUID-Migrator"
 GH_LATEST_API = "https://api.github.com/repos/%s/releases/latest" % GH_REPO
 GITEE_LATEST_API = "https://gitee.com/api/v5/repos/%s/releases/latest" % GITEE_REPO
 UPDATE_SOURCES = ("gitee", "github")      # 更新源顺序：Gitee 优先（国内快），GitHub 兜底
 ASSET_PREFIX = "mc-uuid-migrator"         # 更新附件名前缀（不区分大小写）
+BILI_URL = "https://space.bilibili.com/1632162149"   # 作者 B 站主页
 DOWNLOAD_RETRIES = 3                      # 断线自动重试次数（配合断点续传）
 MAX_REDIRECTS = 5                         # 下载最多跟随的重定向次数（Gitee 会 302 到对象存储）
 _DL_CHUNK = 64 * 1024
@@ -1643,6 +1644,7 @@ class App:
         self._link(links, "GitHub 仓库", "https://github.com/%s" % GH_REPO).pack(side="left")
         self._link(links, "Gitee 发行版", "https://gitee.com/%s/releases" % GITEE_REPO).pack(
             side="left", padx=(14, 0))
+        self._link(links, "B站", BILI_URL).pack(side="left", padx=(14, 0))
 
         ttk.Separator(t4, orient="horizontal").grid(row=1, column=0, sticky="we", pady=10)
         tk.Label(t4, text="自动更新", font=("Microsoft YaHei UI", 10, "bold")).grid(row=2, column=0, sticky="w")

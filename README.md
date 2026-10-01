@@ -43,7 +43,7 @@ Xaero 的路径点与已探索地图保存在**客户端**，按「世界 / 服�
 
 ### 4. 自动更新（「关于」页）
 
-- **独立「关于」分页**：软件图标 + 名称 / 版本 / 作者（CallMeACookieWYQ）/ 许可 + GitHub·Gitee 可点击链接
+- **独立「关于」分页**：软件图标 + 名称 / 版本 / 作者（CallMeACookieWYQ）/ 许可 + GitHub / Gitee / B站 可点击链接
 - **状态行**：当前版本 ｜ 更新源：Gitee（优先）→ GitHub ｜ 上次检查时间
 - **启动静默检查**：只在新版本存在时提示，不打扰
 - **一键更新**：弹窗确认 → 自动下载 → 替换自身 → 重启（无需手动下载覆盖）
@@ -63,7 +63,7 @@ Xaero 的路径点与已探索地图保存在**客户端**，按「世界 / 服�
 
 ## 下载
 
-前往 **[Releases](https://github.com/CookieWYQ/MC-UUID-Migrator/releases)** 下载最新的 `MC-UUID-Migrator-v1.3.1.exe`，双击运行即可（Windows 64 位）。
+前往 **[Releases](https://github.com/CookieWYQ/MC-UUID-Migrator/releases)** 下载最新的 `MC-UUID-Migrator-v1.3.2.exe`，双击运行即可（Windows 64 位）。
 Gitee 镜像：**[gitee.com/CookieWYQ/MC-UUID-Migrator/releases](https://gitee.com/CookieWYQ/MC-UUID-Migrator/releases)**（国内下载更快，程序内「检查更新」也会优先走 Gitee）。
 
 > 说明：Release 附件使用英文名；程序窗口标题与构建产物名仍为中文 `UUID玩家数据迁移.exe`，二者是同一个程序。
