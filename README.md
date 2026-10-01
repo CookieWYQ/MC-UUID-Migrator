@@ -17,6 +17,9 @@
   - gzip 压缩的 NBT（`playerdata/*.dat`、`level.dat`、模组数据）
   - `.mca` 区块文件（逐区块解压 → 替换 → 安全重建，覆盖实体藏在区块里的情况）
 - **覆盖 UUID 的多种写法**：小写/大写 × 带横线/无横线，以及 16 字节二进制形式（NBT 的 `IntArray[4]` 等）
+- **兼容「UUID 前两位分桶」存储的模组**：方块宝可梦（Cobblemon）等把数据存成
+  `<世界>/pokemon/pcstore/<uuid 前 2 位>/<uuid>.dat`，分桶目录名是由 UUID 派生的，
+  迁移时会连目录一起搬到新 UUID 的前两位（否则模组按新 UUID 找不到旧数据，表现为宝可梦 / 图鉴 / PC 盒子全丢）
 - 不依赖固定路径或版本号，适用于所有以 UUID 作玩家标识的版本
 
 ### 2. 两种工作模式
@@ -49,7 +52,7 @@ Xaero 的路径点与已探索地图保存在**客户端**，按「世界 / 服�
 
 ## 下载
 
-前往 **[Releases](https://github.com/CookieWYQ/MC-UUID-Migrator/releases)** 下载最新的 `MC-UUID-Migrator-v1.0.0.exe`，双击运行即可（Windows 64 位）。
+前往 **[Releases](https://github.com/CookieWYQ/MC-UUID-Migrator/releases)** 下载最新的 `MC-UUID-Migrator-v1.1.0.exe`，双击运行即可（Windows 64 位）。
 
 > 说明：Release 附件使用英文名；程序窗口标题与构建产物名仍为中文 `UUID玩家数据迁移.exe`，二者是同一个程序。
 

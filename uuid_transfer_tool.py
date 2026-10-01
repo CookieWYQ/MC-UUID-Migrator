@@ -357,6 +357,23 @@ def uuid_pairs(uuid_a, uuid_b):
     return out
 
 
+def uuid_path_target(path, uuid_a, uuid_b):
+    """计算 UUID 数据文件的迁移目标路径（文件名 + UUID 前两位分桶目录）。
+
+    方块宝可梦（Cobblemon）等模组按 "<根>/<数据目录>/<uuid 前 2 位>/<uuid>.<ext>" 存放玩家数据，
+    分桶目录名由 UUID 前两位派生，因此迁移时必须连目录一起搬到新 UUID 的前两位，否则模组按新 UUID
+    找不到旧数据（表现为宝可梦、图鉴、PC 盒子全部丢失）。
+    返回新路径；若无变化返回 None。"""
+    new = ci_replace(path, uuid_a, uuid_b)
+    parent, name = os.path.split(new)
+    grand, bucket = os.path.split(parent)
+    if len(bucket) == 2 and bucket.lower() == uuid_a.lower()[:2] and uuid_b.lower() in name.lower():
+        new = os.path.join(grand, uuid_b.lower()[:2], name)
+    if os.path.normcase(new) == os.path.normcase(path):
+        return None
+    return new
+
+
 def edit_bytes(data, pairs):
     """把字节内容中出现的各 pat 原位替换（等长）。返回 (新数据, 是否改动)"""
     changed = False
@@ -924,8 +941,8 @@ def transfer(root, uuid_a, uuid_b, report=None, progress=None, cancel=None,
     )
     targets = set(name_hits) | {p for p, _ in content_hits}
     for p in name_hits:                      # 改名目标已存在的 B 旧数据一并备份
-        newp = ci_replace(p, uuid_a, uuid_b)
-        if os.path.exists(newp):
+        newp = uuid_path_target(p, uuid_a, uuid_b)
+        if newp and os.path.exists(newp):
             targets.add(newp)
     os.makedirs(backup_dir, exist_ok=True)
     for p in sorted(targets):
@@ -966,9 +983,15 @@ def transfer(root, uuid_a, uuid_b, report=None, progress=None, cancel=None,
                 report(f"[{tag}] {p}")
 
     # 3) 文件名/目录名替换（目标同名文件已备份，直接覆盖）
-    for p in name_hits:
-        newp = ci_replace(p, uuid_a, uuid_b)
+    #    自深到浅处理：先搬内层文件，再改外层目录，避免父目录先改名导致子项路径失效
+    for p in sorted(name_hits, key=lambda x: x.count(os.sep), reverse=True):
+        newp = uuid_path_target(p, uuid_a, uuid_b)
+        if not newp:
+            continue
         try:
+            d = os.path.dirname(newp)
+            if d:
+                os.makedirs(d, exist_ok=True)   # UUID 前两位分桶目录（Cobblemon 等）需要新建
             os.replace(p, newp)
             if on_renamed:
                 on_renamed(p, newp)
